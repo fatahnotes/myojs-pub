@@ -3,7 +3,7 @@
 # Script deploy manual untuk VPS — jalankan di VPS: bash deploy.sh
 set -e
 
-APP_DIR="/var/www/seaipc2026"
+APP_DIR="/var/www/myojs-pub"
 
 echo "🚀 Deploying SEAIPC 2026 OJS..."
 cd "$APP_DIR"
