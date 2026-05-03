@@ -1,0 +1,48 @@
+{
+  "summary": "SEAIPC v2 features (Final PDF on publish + Journal Publication Requests + CMS publications object form) tested end-to-end. Backend: 22/22 new tests pass + 85/85 full regression (1 flaky test_me ingress timeout, passed on retry). Found and fixed 1 critical backend bug (POST /api/papers/{id}/journal-request returned 500 on first insert because motor's insert_one mutates dict adding ObjectId _id which then failed JSON serialization; fixed with doc.pop('_id', None) before return). Frontend smoke: editor login -> nav-journal-requests visible -> /dashboard/journal-requests loads with table populated (showed 4 entries including 3 TEST entries already auto-set to 'Approved' by backend PATCH test - confirms full upsert+update flow); /journals public page shows 28 published papers each with archive-view-{id} and archive-download-{id} both linking to /api/public/paper/{id}/pdf; admin -> /dashboard/cms -> Call for Papers tab -> publication-name-0/url-0/fee-0 inputs all rendered (object shape, not string); editor -> open under_review paper -> Make Decision -> select 'Publish' -> data-testid='final-pdf-input' (file input accept='.pdf') becomes visible. Author journal-request UI dialog itself was not interactively clicked (playwright fetch quirk in test harness, not an app bug) but button rendering code is confirmed in /app/frontend/src/pages/PaperDetail.jsx line 358 with correct data-testid. Email Resend remains MOCKED (RESEND_API_KEY empty).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/papers/{id}/journal-request", "issue": "(FIXED) motor insert_one mutated doc adding ObjectId _id which broke JSON encoder. Fixed by doc.pop('_id', None) after insert. RCA: when no existing journal request exists, code path inserts the doc and returns it; insert_one populates `_id` field on the same dict reference; FastAPI's jsonable_encoder then fails on ObjectId."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Decision dialog (Make Decision -> Publish)", "issues": ["Console warning: Missing aria-describedby on DialogContent (a11y) - low-priority a11y nit, not blocking. Same warning appears across other dialogs."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_seaipc_v2_features.py",
+    "/app/test_reports/pytest/pytest_seaipc_v2.xml",
+    "/app/test_reports/pytest/pytest_all.xml"
+  ],
+  "action_items": [
+    "(Optional) Add aria-describedby (or DialogDescription) to DialogContent across PaperDetail and other dialogs to silence Radix a11y warning.",
+    "(Optional) The unique index on db.journal_requests.paper_id enforces 1 request per paper. Current upsert behaviour preserves request id+created_at but resets nothing else. If product wants history of journal targets per paper, drop the unique index and create a new request on each submission.",
+    "(Optional) /api/journal-requests has no pagination/limit filter (caps at 500). Document this contract or add ?limit&offset before audience grows.",
+    "(Optional) PATCH /api/journal-requests/{id} body type is `dict` (no Pydantic model). An admin sending status='garbage' would persist. Add Literal['pending','approved','rejected','submitted'] enum validation."
+  ],
+  "critical_code_review_comments": [
+    "FIXED: server.py:846 was returning a dict mutated by motor with ObjectId; any first-time POST /api/papers/{id}/journal-request returned 500. Fix in same file (doc.pop('_id', None)). Same anti-pattern could exist anywhere insert_one is followed by `return doc` - audit other endpoints (notify(), upload-final and decision insert_one paths look fine since they return their own constructed dicts).",
+    "GET /api/public/paper/{id}/pdf has no Cache-Control header but is a CDN-friendly endpoint - adding Cache-Control: public, max-age=300 would reduce backend load when archive page is heavily browsed.",
+    "DecisionIn.final_file_id is not validated to actually exist in db.files OR belong to this paper. Editor could pass any file_id (even another paper's) and it would silently be set as final_file_id on publish. Add validation: file must exist and file.paper_id == paper_id (or be a 'final' kind uploaded for this paper).",
+    "JournalRequestIn has no bound on string lengths - journal_name/note are unbounded; add max_length=200/2000 to prevent abuse.",
+    "create_journal_request has author check `p['author_id'] != user['id'] and user['role'] not in ('admin',)` but spec says editor should NOT be able to submit on author's behalf. Current code accidentally lets admin (but not editor) submit; intentional? Document in API contract."
+  ],
+  "updated_files": [
+    "/app/backend/server.py (1-line fix: doc.pop('_id', None) after insert_one in create_journal_request)",
+    "/app/backend/tests/test_seaipc_v2_features.py (NEW - 22 tests covering upload-final, public PDF, decision final_file_id fallback, journal-request CRUD, publications migration)"
+  ],
+  "success_rate": {
+    "backend": "100% (22/22 new + 85/85 regression with retry on flaky test_me)",
+    "frontend": "5/6 critical UI flows verified (editor sidebar+table, public archive view/download links, CMS publications object form, editor decision dialog with final-pdf-input). Author submit-journal-request dialog not interactively clicked due to playwright test-harness fetch issue, but button data-testid present in code."
+  },
+  "test_credentials": "admin@ojs.com/admin123, editor@ojs.com/editor123, reviewer@ojs.com/reviewer123, author@ojs.com/author123",
+  "seed_data_creation": "Tests create TEST_v2_*, TEST_jr_*, TEST_dec_*, TEST_final_*, TEST_jr_paper_* papers and one TEST_LegacyJournal_* publications entry (auto-restored). Journal requests for TEST_jr_paper_* persist (status=approved after PATCH test). One temporary user 'other_*@example.com' created+deleted per test. Original cfp.publications restored after migration test.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "4 backend test files now: test_ojs_api.py (34), test_seaipc_features.py (12), test_cms.py (17), test_seaipc_v2_features.py (22). Run all: REACT_APP_BACKEND_URL=https://paper-review-flow.preview.emergentagent.com pytest /app/backend/tests/ -v. test_me in test_ojs_api.py is flaky (intermittent ingress timeout, ~10-20% failure, always passes on retry). Login response is FLAT shape (no nested 'user' field) - direct keys: id, email, name, role, affiliation, created_at, token. The DB has accumulating TEST_* papers/files/journal_requests from prior runs - safe to ignore (no cleanup endpoints exist for papers/files), but db.journal_requests is bounded to 1 per paper (unique index). Resend email integration is MOCKED (RESEND_API_KEY env empty); backend logs '[EMAIL MOCKED ...]' on send. Frontend uses Bearer auth only (no withCredentials).",
+  "rca of the issue": "Bug found and fixed: First-time POST /api/papers/{paper_id}/journal-request returned HTTP 500 'Internal Server Error'. RCA: in server.py create_journal_request, when no existing request, code does `await db.journal_requests.insert_one(doc)` then `return doc`. Motor's insert_one mutates the same dict in place by adding `_id: ObjectId(...)`. FastAPI then tries jsonable_encoder(doc) which raises TypeError('ObjectId object is not iterable'). Reproduction: as author of any published paper without an existing journal request, POST {journal_name:'X'} to /api/papers/{id}/journal-request -> 500. Mitigation applied: add `doc.pop('_id', None)` immediately after insert_one before notify/return. Verified: same test now returns 200 with serialised JSON containing all expected fields and no _id leak."
+}

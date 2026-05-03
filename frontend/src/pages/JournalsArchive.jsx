@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, API } from "@/lib/api";
 import PublicHeader from "@/components/PublicHeader";
 import PublicFooter from "@/components/PublicFooter";
 import { useI18n } from "@/i18n";
+import { Button } from "@/components/ui/button";
+import { Download, FileText } from "lucide-react";
 
 const LIB_IMG = "https://images.unsplash.com/photo-1756037020659-6f9d3418f6b6?crop=entropy&cs=srgb&fm=jpg&q=85&w=1600";
 
@@ -40,6 +42,27 @@ export default function JournalsArchive() {
               {p.keywords?.length > 0 && (
                 <div className="mt-4 flex flex-wrap gap-2">
                   {p.keywords.map((k) => <span key={k} className="text-[11px] font-mono uppercase tracking-wider border border-gray-300 px-2 py-0.5">{k}</span>)}
+                </div>
+              )}
+              {(p.final_file_id || p.file_id) && (
+                <div className="mt-5 flex flex-wrap gap-2">
+                  <a
+                    data-testid={`archive-view-${p.id}`}
+                    href={`${API}/public/paper/${p.id}/pdf`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 text-xs font-semibold tracking-wide border border-gray-900 px-4 py-2 hover:bg-gray-900 hover:text-white transition-base"
+                  >
+                    <FileText size={12}/> View PDF
+                  </a>
+                  <a
+                    data-testid={`archive-download-${p.id}`}
+                    href={`${API}/public/paper/${p.id}/pdf`}
+                    download={`${p.title.replace(/[^a-zA-Z0-9]+/g,'_')}.pdf`}
+                    className="inline-flex items-center gap-2 text-xs font-semibold tracking-wide bg-[var(--brand)] hover:bg-[var(--brand-hover)] text-white px-4 py-2 transition-base"
+                  >
+                    <Download size={12}/> Download
+                  </a>
                 </div>
               )}
             </article>

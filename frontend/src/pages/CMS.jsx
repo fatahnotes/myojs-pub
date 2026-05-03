@@ -415,15 +415,38 @@ function CfpTab({ content, onSave }) {
       <div className="pt-4 border-t border-gray-200">
         <div className="flex items-center justify-between mb-2">
           <Label className="text-xs uppercase tracking-wider">Publications ({(c.publications || []).length})</Label>
-          <Button variant="ghost" size="sm" className="rounded-sm" onClick={() => addTo("publications")} data-testid="add-publication"><Plus size={12} className="mr-1" /> Add</Button>
+          <Button variant="ghost" size="sm" className="rounded-sm" onClick={() => setC({ ...c, publications: [...(c.publications || []), { name: "", url: "", fee: "" }] })} data-testid="add-publication"><Plus size={12} className="mr-1" /> Add</Button>
         </div>
-        <div className="space-y-2">
-          {(c.publications || []).map((v, i) => (
-            <div key={i} className="flex gap-2 items-start">
-              <Textarea rows={2} value={v} onChange={(e)=>updateList("publications", i, e.target.value)} className="rounded-sm flex-1" data-testid={`publication-${i}`} />
-              <button onClick={() => removeFrom("publications", i)} className="text-red-600 hover:text-red-700 mt-2" data-testid={`remove-publication-${i}`}><Trash2 size={14} /></button>
-            </div>
-          ))}
+        <div className="space-y-3">
+          {(c.publications || []).map((v, i) => {
+            const obj = typeof v === "string" ? { name: v, url: "", fee: "" } : v;
+            const updateField = (k, val) => {
+              const n = [...(c.publications || [])];
+              n[i] = { ...obj, [k]: val };
+              setC({ ...c, publications: n });
+            };
+            return (
+              <div key={i} data-testid={`publication-item-${i}`} className="border border-gray-300 bg-white p-3 space-y-2">
+                <div>
+                  <Label className="text-[10px] uppercase tracking-wider text-gray-500">Journal Name</Label>
+                  <Textarea rows={2} value={obj.name || ""} onChange={(e)=>updateField("name", e.target.value)} className="rounded-sm mt-1" data-testid={`publication-name-${i}`}/>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-[10px] uppercase tracking-wider text-gray-500">Website URL</Label>
+                    <Input placeholder="https://..." value={obj.url || ""} onChange={(e)=>updateField("url", e.target.value)} className="rounded-sm mt-1" data-testid={`publication-url-${i}`}/>
+                  </div>
+                  <div>
+                    <Label className="text-[10px] uppercase tracking-wider text-gray-500">Estimated Fee</Label>
+                    <Input placeholder="IDR 500,000 / USD 50" value={obj.fee || ""} onChange={(e)=>updateField("fee", e.target.value)} className="rounded-sm mt-1" data-testid={`publication-fee-${i}`}/>
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <button onClick={() => removeFrom("publications", i)} className="text-xs text-red-600 hover:underline" data-testid={`remove-publication-${i}`}>Remove</button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 

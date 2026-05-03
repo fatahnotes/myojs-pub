@@ -41,12 +41,21 @@ export default function CallForPapers() {
             <div className="overline text-blue-300 mb-4">— Publication Opportunities</div>
             <h2 className="font-display text-2xl lg:text-4xl tracking-tight font-bold mb-8 max-w-2xl">Selected accepted papers will be offered for publication in:</h2>
             <ul className="space-y-5 max-w-3xl">
-              {cfp.publications.map((p, i) => (
-                <li key={i} className="flex gap-4 border-t border-gray-700 pt-4">
-                  <BookOpen size={18} className="text-blue-300 mt-1 shrink-0" />
-                  <span className="text-sm lg:text-base text-gray-200 leading-relaxed">{p}</span>
-                </li>
-              ))}
+              {cfp.publications.map((p, i) => {
+                const obj = typeof p === "string" ? { name: p, url: "", fee: "" } : p;
+                return (
+                  <li key={i} className="flex gap-4 border-t border-gray-700 pt-4">
+                    <BookOpen size={18} className="text-blue-300 mt-1 shrink-0" />
+                    <div className="flex-1">
+                      <div className="text-sm lg:text-base text-gray-200 leading-relaxed">{obj.name}</div>
+                      <div className="flex flex-wrap gap-4 mt-2 text-xs font-mono">
+                        {obj.url && <a href={obj.url} target="_blank" rel="noopener noreferrer" className="text-blue-300 hover:underline">Visit journal →</a>}
+                        {obj.fee && <span className="text-gray-400">Est. fee: <span className="text-gray-100 font-semibold">{obj.fee}</span></span>}
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         )}

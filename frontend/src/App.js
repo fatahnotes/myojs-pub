@@ -22,6 +22,7 @@ import SubmitPaper from "@/pages/SubmitPaper";
 import PaperDetail from "@/pages/PaperDetail";
 import Notifications from "@/pages/Notifications";
 import UserManagement from "@/pages/UserManagement";
+import JournalRequests from "@/pages/JournalRequests";
 import CMS from "@/pages/CMS";
 
 function RoleGate({ roles, children }) {
@@ -58,6 +59,7 @@ function App() {
                 <Route path="submit" element={<RoleGate roles={["author"]}><SubmitPaper /></RoleGate>} />
                 <Route path="assigned" element={<RoleGate roles={["reviewer"]}><PapersList scope="assigned" /></RoleGate>} />
                 <Route path="submissions" element={<RoleGate roles={["editor"]}><PapersList scope="all" /></RoleGate>} />
+                <Route path="journal-requests" element={<RoleGate roles={["editor"]}><JournalRequests /></RoleGate>} />
                 <Route path="users" element={<RoleGate roles={["admin"]}><UserManagement /></RoleGate>} />
                 <Route path="cms" element={<RoleGate roles={["admin"]}><CMS /></RoleGate>} />
                 <Route path="notifications" element={<Notifications />} />

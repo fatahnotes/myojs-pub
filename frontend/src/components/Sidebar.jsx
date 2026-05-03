@@ -3,7 +3,7 @@ import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/i18n";
 import { useContent } from "@/lib/content";
 import {
-  LayoutDashboard, FileText, Upload, ClipboardCheck, Inbox, Users, Bell, Library, LogOut, Palette
+  LayoutDashboard, FileText, Upload, ClipboardCheck, Inbox, Users, Bell, Library, LogOut, Palette, Send
 } from "lucide-react";
 
 function resolveUrl(u) {
@@ -38,7 +38,10 @@ export default function Sidebar() {
     items.push({ to: "/dashboard/assigned", label: t("sidebar_assigned"), icon: ClipboardCheck, testid: "nav-assigned" });
   }
   if (role === "editor" || role === "admin") {
-    items.push({ to: "/dashboard/submissions", label: t("sidebar_all_subs"), icon: Inbox, testid: "nav-all-subs" });
+    items.push(
+      { to: "/dashboard/submissions", label: t("sidebar_all_subs"), icon: Inbox, testid: "nav-all-subs" },
+      { to: "/dashboard/journal-requests", label: "Journal Requests", icon: Send, testid: "nav-journal-requests" },
+    );
   }
   if (role === "admin") {
     items.push(

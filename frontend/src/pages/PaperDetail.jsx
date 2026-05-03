@@ -3,6 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { api, formatApiError, API } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/i18n";
+import { useContent } from "@/lib/content";
 import StatusBadge from "@/components/StatusBadge";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,7 @@ export default function PaperDetail() {
   const { id } = useParams();
   const { user } = useAuth();
   const { t } = useI18n();
+  const { content } = useContent();
   const [paper, setPaper] = useState(null);
   const [reviews, setReviews] = useState([]);
   const [reviewers, setReviewers] = useState([]);
@@ -27,7 +29,12 @@ export default function PaperDetail() {
   const [openDecide, setOpenDecide] = useState(false);
   const [openReview, setOpenReview] = useState(false);
   const [openPreview, setOpenPreview] = useState(false);
+  const [openJournal, setOpenJournal] = useState(false);
+  const [journalReq, setJournalReq] = useState(null);
+  const [journalForm, setJournalForm] = useState({ journal_name: "", journal_url: "", journal_fee: "", note: "" });
   const [decision, setDecision] = useState({ decision: "accept", note: "", doi: "" });
+  const [finalPdf, setFinalPdf] = useState(null);
+  const [uploadingFinal, setUploadingFinal] = useState(false);
   const [review, setReview] = useState({ score: 7, recommendation: "accept", comments: "", confidential_notes: "" });
   const [revisionFile, setRevisionFile] = useState(null);
 
@@ -36,6 +43,13 @@ export default function PaperDetail() {
       const [p, r] = await Promise.all([api.get(`/papers/${id}`), api.get(`/papers/${id}/reviews`)]);
       setPaper(p.data);
       setReviews(r.data);
+      // Load journal request if paper is published
+      if (p.data.status === "published") {
+        try {
+          const jr = await api.get(`/papers/${id}/journal-request`);
+          setJournalReq(jr.data && jr.data.id ? jr.data : null);
+        } catch {}
+      }
     } catch (e) { toast.error(formatApiError(e)); }
   };
   useEffect(() => { load(); }, [id]);
@@ -59,12 +73,34 @@ export default function PaperDetail() {
 
   const decide = async () => {
     try {
+      let finalFileId = null;
+      if (decision.decision === "publish" && finalPdf) {
+        setUploadingFinal(true);
+        const fd = new FormData();
+        fd.append("file", finalPdf);
+        const { data } = await api.post(`/papers/${id}/upload-final`, fd, { headers: { "Content-Type": "multipart/form-data" } });
+        finalFileId = data.file_id;
+        setUploadingFinal(false);
+      }
       const payload = { decision: decision.decision, note: decision.note };
       if (decision.decision === "publish" && decision.doi) payload.doi = decision.doi;
+      if (finalFileId) payload.final_file_id = finalFileId;
       await api.post(`/papers/${id}/decision`, payload);
       toast.success("Decision recorded");
       setOpenDecide(false);
+      setFinalPdf(null);
       load();
+    } catch (e) { setUploadingFinal(false); toast.error(formatApiError(e)); }
+  };
+
+  const submitJournalRequest = async () => {
+    if (!journalForm.journal_name) return toast.error("Select a journal");
+    try {
+      await api.post(`/papers/${id}/journal-request`, journalForm);
+      toast.success("Journal publication request submitted");
+      setOpenJournal(false);
+      const r = await api.get(`/papers/${id}/journal-request`);
+      setJournalReq(r.data && r.data.id ? r.data : null);
     } catch (e) { toast.error(formatApiError(e)); }
   };
 
@@ -238,9 +274,21 @@ export default function PaperDetail() {
                     <div className="text-xs text-gray-500 mt-1">{t("doi_hint")}</div>
                   </div>
                 )}
+                {decision.decision === "publish" && (
+                  <div className="border-t border-gray-200 pt-4">
+                    <Label className="text-xs uppercase tracking-wider">Final PDF (optional)</Label>
+                    <input id="final-pdf-input" type="file" accept=".pdf" className="hidden" data-testid="final-pdf-input" onChange={(e)=>setFinalPdf(e.target.files?.[0] || null)}/>
+                    <label htmlFor="final-pdf-input" className="mt-2 flex items-center gap-3 border border-dashed border-gray-300 px-4 py-3 cursor-pointer hover:border-[var(--brand)] transition-base">
+                      <UploadCloud size={16} className="text-gray-500" />
+                      <div className="text-sm flex-1">{finalPdf ? finalPdf.name : "Upload final PDF for proceedings"}</div>
+                      {finalPdf && <button type="button" onClick={(e)=>{e.preventDefault(); setFinalPdf(null);}} className="text-xs text-red-600">Clear</button>}
+                    </label>
+                    <div className="text-xs text-gray-500 mt-1">If left blank, the latest PDF uploaded by the author will be used automatically.</div>
+                  </div>
+                )}
               </div>
               <DialogFooter>
-                <Button data-testid="confirm-decision-btn" onClick={decide} className="rounded-sm bg-[var(--brand)] hover:bg-[var(--brand-hover)] text-white">Finalize</Button>
+                <Button data-testid="confirm-decision-btn" onClick={decide} disabled={uploadingFinal} className="rounded-sm bg-[var(--brand)] hover:bg-[var(--brand-hover)] text-white">{uploadingFinal ? "Uploading..." : "Finalize"}</Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
@@ -297,7 +345,79 @@ export default function PaperDetail() {
             {revisionFile && <Button data-testid="upload-revision-btn" onClick={uploadRevision} className="rounded-sm bg-[var(--brand)] hover:bg-[var(--brand-hover)] text-white">{t("upload_revision")}</Button>}
           </div>
         )}
+
+        {isAuthor && paper.status === "published" && (
+          <Dialog open={openJournal} onOpenChange={(v) => {
+            setOpenJournal(v);
+            if (v && journalReq) setJournalForm({
+              journal_name: journalReq.journal_name, journal_url: journalReq.journal_url || "",
+              journal_fee: journalReq.journal_fee || "", note: journalReq.note || "",
+            });
+          }}>
+            <DialogTrigger asChild>
+              <Button data-testid="journal-request-btn" className="rounded-sm bg-[var(--brand)] hover:bg-[var(--brand-hover)] text-white">
+                {journalReq ? "Update Journal Request" : "Continue to Journal Publication"}
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="rounded-sm max-w-xl">
+              <DialogHeader><DialogTitle>Journal Publication Request</DialogTitle></DialogHeader>
+              <div className="space-y-4">
+                <p className="text-sm text-gray-600">Select a partner journal to continue the publication. Editor/admin will receive your request.</p>
+                <div>
+                  <Label className="text-xs uppercase tracking-wider">Target Journal</Label>
+                  <div className="mt-2 space-y-2 max-h-[280px] overflow-y-auto">
+                    {(content.cfp?.publications || []).map((p, i) => {
+                      const selected = journalForm.journal_name === p.name;
+                      return (
+                        <label key={i} data-testid={`journal-option-${i}`} className={`flex items-start gap-3 p-3 border cursor-pointer transition-base ${selected ? "border-[var(--brand)] bg-[var(--brand-soft)]" : "border-gray-300 hover:border-gray-500"}`}>
+                          <input
+                            type="radio"
+                            name="journal"
+                            checked={selected}
+                            onChange={() => setJournalForm({ ...journalForm, journal_name: p.name, journal_url: p.url || "", journal_fee: p.fee || "" })}
+                            className="mt-1"
+                          />
+                          <div className="flex-1">
+                            <div className="text-sm font-semibold">{p.name}</div>
+                            <div className="flex flex-wrap gap-3 mt-1 text-xs text-gray-600">
+                              {p.url && <a href={p.url} target="_blank" rel="noopener noreferrer" className="text-[var(--brand)] hover:underline" onClick={(e)=>e.stopPropagation()}>Visit journal →</a>}
+                              {p.fee && <span className="font-mono">Est. fee: <span className="font-semibold text-gray-900">{p.fee}</span></span>}
+                            </div>
+                          </div>
+                        </label>
+                      );
+                    })}
+                    {(content.cfp?.publications || []).length === 0 && (
+                      <div className="text-sm text-gray-500 border border-dashed border-gray-300 p-4 text-center">No partner journals configured. Ask admin to add them in Site Content → Call for Papers.</div>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-xs uppercase tracking-wider">Note (optional)</Label>
+                  <Textarea data-testid="journal-note" rows={3} value={journalForm.note} onChange={(e)=>setJournalForm({...journalForm, note: e.target.value})} className="rounded-sm mt-2"/>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button data-testid="submit-journal-req-btn" onClick={submitJournalRequest} className="rounded-sm bg-[var(--brand)] hover:bg-[var(--brand-hover)] text-white">Submit</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
       </div>
+
+      {/* Journal Request status (for author + editors) */}
+      {paper.status === "published" && journalReq && (
+        <Card className="rounded-sm border border-gray-200 shadow-none p-6 bg-[var(--brand-soft)]">
+          <div className="overline text-[var(--brand)] mb-2">— Journal Publication Request</div>
+          <div className="text-base font-semibold">{journalReq.journal_name}</div>
+          <div className="flex flex-wrap gap-4 mt-2 text-xs font-mono text-gray-700">
+            {journalReq.journal_url && <a href={journalReq.journal_url} target="_blank" rel="noopener noreferrer" className="hover:underline">{journalReq.journal_url}</a>}
+            {journalReq.journal_fee && <span>Est. fee: <span className="font-semibold">{journalReq.journal_fee}</span></span>}
+            <span>Status: <span className="font-semibold uppercase">{journalReq.status}</span></span>
+          </div>
+          {journalReq.note && <p className="text-sm text-gray-700 mt-3 whitespace-pre-wrap">{journalReq.note}</p>}
+        </Card>
+      )}
 
       {/* Decision */}
       {paper.decision && (

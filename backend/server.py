@@ -218,6 +218,13 @@ class DecisionIn(BaseModel):
     decision: Literal["accept", "reject", "revision_required", "publish"]
     note: str = ""
     doi: Optional[str] = None
+    final_file_id: Optional[str] = None
+
+class JournalRequestIn(BaseModel):
+    journal_name: str
+    journal_url: Optional[str] = ""
+    journal_fee: Optional[str] = ""
+    note: Optional[str] = ""
 
 class ForgotIn(BaseModel):
     email: EmailStr
@@ -310,10 +317,10 @@ DEFAULT_CONTENT = {
             "Marketing", "Investment", "Digital Business and Entrepreneurship", "Sukuk",
         ],
         "publications": [
-            "Al-Iqtishad: Jurnal Ilmu Ekonomi Syariah, UIN Syarif Hidayatullah Jakarta (Sinta 2)",
-            "Ahkam: Jurnal Ilmu Syariah, UIN Syarif Hidayatullah Jakarta (Q1 Scopus)",
-            "Journal of Islamic Philanthropy & Social Finance (CIPSF, UiTM Malaysia)",
-            "E-Journal of Islamic Thought & Understanding (E-JITU), Mycite index",
+            {"name": "Al-Iqtishad: Jurnal Ilmu Ekonomi Syariah, UIN Syarif Hidayatullah Jakarta (Sinta 2)", "url": "", "fee": ""},
+            {"name": "Ahkam: Jurnal Ilmu Syariah, UIN Syarif Hidayatullah Jakarta (Q1 Scopus)", "url": "", "fee": ""},
+            {"name": "Journal of Islamic Philanthropy & Social Finance (CIPSF, UiTM Malaysia)", "url": "", "fee": ""},
+            {"name": "E-Journal of Islamic Thought & Understanding (E-JITU), Mycite index", "url": "", "fee": ""},
         ],
     },
     "templates": [
@@ -360,6 +367,27 @@ async def get_content():
         c = {**DEFAULT_CONTENT}
     # Ensure all top-level keys exist
     merged = {**DEFAULT_CONTENT, **{k: v for k, v in c.items() if v is not None}}
+    # Backward compat: migrate publications from list[str] -> list[dict]
+    try:
+        cfp = merged.get("cfp") or {}
+        pubs = cfp.get("publications") or []
+        migrated = []
+        changed = False
+        for p in pubs:
+            if isinstance(p, str):
+                migrated.append({"name": p, "url": "", "fee": ""})
+                changed = True
+            elif isinstance(p, dict):
+                migrated.append({"name": p.get("name", ""), "url": p.get("url", ""), "fee": p.get("fee", "")})
+            else:
+                migrated.append({"name": str(p), "url": "", "fee": ""})
+                changed = True
+        cfp["publications"] = migrated
+        merged["cfp"] = cfp
+        if changed:
+            await db.site_content.update_one({"id": "singleton"}, {"$set": {"cfp.publications": migrated}})
+    except Exception:
+        pass
     # Mask the Resend API key — never expose raw secret
     es = dict(merged.get("email_settings") or {})
     raw_key = es.get("resend_api_key") or ""
@@ -606,6 +634,8 @@ async def create_paper(body: PaperIn, user: dict = Depends(get_current_user)):
         "status": "submitted",
         "file_id": None,
         "file_name": None,
+        "final_file_id": None,
+        "final_file_name": None,
         "reviewer_ids": [],
         "decision": None,
         "decision_note": None,
@@ -733,6 +763,124 @@ async def preview_file(file_id: str, token: Optional[str] = Query(None), request
     return FastResponse(content=data, media_type=f.get("content_type", ct),
                         headers={"Content-Disposition": f'inline; filename="{f["original_filename"]}"'})
 
+@api_router.post("/papers/{paper_id}/upload-final")
+async def upload_final_pdf(paper_id: str, file: UploadFile = File(...), user: dict = Depends(require_roles("editor"))):
+    """Editor/admin uploads the FINAL version of the PDF (post-review) before publishing."""
+    p = await db.papers.find_one({"id": paper_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    ext = file.filename.split(".")[-1].lower() if "." in file.filename else "bin"
+    if ext not in ("pdf",):
+        raise HTTPException(status_code=400, detail="Only PDF allowed for final version")
+    data = await file.read()
+    if len(data) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 25MB)")
+    file_id = str(uuid.uuid4())
+    path = f"{APP_NAME}/papers/{p['author_id']}/final_{file_id}.pdf"
+    result = put_object(path, data, "application/pdf")
+    await db.files.insert_one({
+        "id": file_id,
+        "paper_id": paper_id,
+        "storage_path": result["path"],
+        "original_filename": file.filename,
+        "content_type": "application/pdf",
+        "size": result.get("size", len(data)),
+        "uploaded_by": user["id"],
+        "is_deleted": False,
+        "kind": "final",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    await db.papers.update_one({"id": paper_id}, {"$set": {
+        "final_file_id": file_id,
+        "final_file_name": file.filename,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }})
+    return {"file_id": file_id, "filename": file.filename}
+
+@api_router.get("/public/paper/{paper_id}/pdf")
+async def public_paper_pdf(paper_id: str):
+    """Stream the final PDF of a PUBLISHED paper — fully public."""
+    p = await db.papers.find_one({"id": paper_id, "status": "published"}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Published paper not found")
+    fid = p.get("final_file_id") or p.get("file_id")
+    if not fid:
+        raise HTTPException(status_code=404, detail="No file attached")
+    f = await db.files.find_one({"id": fid, "is_deleted": False}, {"_id": 0})
+    if not f:
+        raise HTTPException(status_code=404, detail="File missing")
+    data, ct = get_object(f["storage_path"])
+    return FastResponse(content=data, media_type=f.get("content_type", ct),
+                        headers={"Content-Disposition": f'inline; filename="{f["original_filename"]}"'})
+
+# ==================== JOURNAL PUBLICATION REQUESTS ====================
+@api_router.post("/papers/{paper_id}/journal-request")
+async def create_journal_request(paper_id: str, body: JournalRequestIn, user: dict = Depends(get_current_user)):
+    p = await db.papers.find_one({"id": paper_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if p["author_id"] != user["id"] and user["role"] not in ("admin",):
+        raise HTTPException(status_code=403, detail="Only the paper author can submit a journal request")
+    if p["status"] != "published":
+        raise HTTPException(status_code=400, detail="Paper must be published before requesting journal publication")
+    # Upsert by (paper_id, author_id)
+    now = datetime.now(timezone.utc).isoformat()
+    existing = await db.journal_requests.find_one({"paper_id": paper_id}, {"_id": 0})
+    doc = {
+        "id": existing["id"] if existing else str(uuid.uuid4()),
+        "paper_id": paper_id,
+        "paper_title": p["title"],
+        "author_id": p["author_id"],
+        "author_name": p["author_name"],
+        "journal_name": body.journal_name,
+        "journal_url": body.journal_url or "",
+        "journal_fee": body.journal_fee or "",
+        "note": body.note or "",
+        "status": existing["status"] if existing else "pending",
+        "created_at": existing["created_at"] if existing else now,
+        "updated_at": now,
+    }
+    if existing:
+        await db.journal_requests.update_one({"id": existing["id"]}, {"$set": doc})
+    else:
+        await db.journal_requests.insert_one(doc)
+    # Strip mongo _id (motor mutates the dict on insert) before returning
+    doc.pop("_id", None)
+    # Notify editors
+    editors = await db.users.find({"role": {"$in": ["editor", "admin"]}}, {"_id": 0, "id": 1}).to_list(100)
+    for e in editors:
+        await notify(e["id"], "Journal Publication Request",
+                     f"Author '{p['author_name']}' wants to publish '{p['title']}' in {body.journal_name}.",
+                     "/dashboard/journal-requests", send_email_flag=False)
+    return doc
+
+@api_router.get("/papers/{paper_id}/journal-request")
+async def get_journal_request(paper_id: str, user: dict = Depends(get_current_user)):
+    p = await db.papers.find_one({"id": paper_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    allowed = user["role"] in ("admin", "editor") or p["author_id"] == user["id"]
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    req = await db.journal_requests.find_one({"paper_id": paper_id}, {"_id": 0})
+    return req or {}
+
+@api_router.get("/journal-requests")
+async def list_journal_requests(user: dict = Depends(require_roles("editor"))):
+    items = await db.journal_requests.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return items
+
+@api_router.patch("/journal-requests/{req_id}")
+async def update_journal_request(req_id: str, body: dict, user: dict = Depends(require_roles("editor"))):
+    allowed = {k: v for k, v in body.items() if k in ("status", "note")}
+    if not allowed:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    allowed["updated_at"] = datetime.now(timezone.utc).isoformat()
+    res = await db.journal_requests.update_one({"id": req_id}, {"$set": allowed})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Request not found")
+    return {"ok": True}
+
 # ==================== REVIEWS ====================
 @api_router.post("/papers/{paper_id}/assign-reviewers")
 async def assign_reviewers(paper_id: str, body: AssignReviewersIn, user: dict = Depends(require_roles("editor"))):
@@ -820,6 +968,17 @@ async def make_decision(paper_id: str, body: DecisionIn, user: dict = Depends(re
     if body.decision == "publish":
         doi = body.doi or f"10.9999/seaipc2026.{paper_id[:8]}"
         update_doc["doi"] = doi
+        # Pick final_file_id: explicit body override, else keep existing, else fall back to latest author file
+        current_final = p.get("final_file_id")
+        if body.final_file_id:
+            update_doc["final_file_id"] = body.final_file_id
+            # Resolve filename
+            f = await db.files.find_one({"id": body.final_file_id}, {"_id": 0})
+            if f:
+                update_doc["final_file_name"] = f["original_filename"]
+        elif not current_final and p.get("file_id"):
+            update_doc["final_file_id"] = p["file_id"]
+            update_doc["final_file_name"] = p.get("file_name")
     await db.papers.update_one({"id": paper_id}, {"$set": update_doc})
     title_msg = {
         "accept": "Paper Accepted", "reject": "Paper Rejected",
@@ -882,6 +1041,8 @@ async def startup():
     await db.notifications.create_index("user_id")
     await db.password_reset_tokens.create_index("token", unique=True)
     await db.site_content.create_index("id", unique=True)
+    await db.journal_requests.create_index("id", unique=True)
+    await db.journal_requests.create_index("paper_id", unique=True)
     # Seed default content if missing
     if not await db.site_content.find_one({"id": "singleton"}):
         await db.site_content.insert_one({**DEFAULT_CONTENT})
