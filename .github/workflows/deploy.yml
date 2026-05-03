@@ -19,7 +19,7 @@ jobs:
           port: ${{ secrets.VPS_PORT }}
           script: |
             set -e
-            cd /var/www/seaipc2026
+            cd /var/www/myojs-pub
 
             echo "==> Pull terbaru"
             git pull origin main
