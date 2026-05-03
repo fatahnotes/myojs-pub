@@ -10,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { Plus, Trash2, UploadCloud, Check, ImageIcon, Save } from "lucide-react";
+import { Plus, Trash2, UploadCloud, Check, ImageIcon, Save, Mail, Send, Eye, EyeOff } from "lucide-react";
 
 function resolveUrl(u) {
   if (!u) return "";
@@ -482,6 +482,138 @@ function TemplatesTab({ content, onSave }) {
   );
 }
 
+// ======================= EMAIL TAB =======================
+function EmailTab({ content, onSave }) {
+  const [es, setEs] = useState(content.email_settings || {});
+  const [newKey, setNewKey] = useState(""); // only sent when user types a new one
+  const [showKey, setShowKey] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testTo, setTestTo] = useState("");
+  useEffect(() => { setEs(content.email_settings || {}); }, [content.email_settings]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const payload = { email_settings: {
+        sender_email: es.sender_email || "",
+        enabled: !!es.enabled,
+        ...(newKey ? { resend_api_key: newKey } : {}),
+      }};
+      await onSave(payload);
+      setNewKey("");
+      toast.success("Email settings saved");
+    } catch (e) { toast.error(formatApiError(e)); }
+    finally { setSaving(false); }
+  };
+
+  const sendTest = async () => {
+    if (!testTo) return toast.error("Enter a recipient email");
+    setTesting(true);
+    try {
+      const payload = { to: testTo };
+      // If user typed a new key but hasn't saved, include it in the test call
+      if (newKey) payload.resend_api_key = newKey;
+      if (es.sender_email) payload.sender_email = es.sender_email;
+      const { data } = await api.post("/content/email/test", payload);
+      toast.success(`Test sent to ${data.to} (id: ${data.id})`);
+    } catch (e) { toast.error(formatApiError(e)); }
+    finally { setTesting(false); }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* How-to banner */}
+      <div className="border border-blue-200 bg-blue-50 p-5 text-sm text-gray-800 leading-relaxed">
+        <div className="overline text-[var(--brand)] mb-2">— How to get a Resend API key</div>
+        <ol className="list-decimal list-inside space-y-1">
+          <li>Go to <a className="underline text-[var(--brand)]" href="https://resend.com/signup" target="_blank" rel="noopener noreferrer">resend.com/signup</a> — you can sign up with your Gmail.</li>
+          <li>After login, open <a className="underline text-[var(--brand)]" href="https://resend.com/api-keys" target="_blank" rel="noopener noreferrer">Dashboard → API Keys → Create API Key</a>.</li>
+          <li>Copy the key (starts with <span className="font-mono text-xs">re_</span>) and paste it below.</li>
+          <li>Free tier allows sending from <span className="font-mono text-xs">onboarding@resend.dev</span>. To use your own address (e.g. <span className="font-mono text-xs">noreply@seaipc2026.imz.or.id</span>), add & verify your domain in Resend (SPF + DKIM DNS records).</li>
+          <li>Click <strong>Save</strong>, then use <strong>Send Test Email</strong> to confirm.</li>
+        </ol>
+      </div>
+
+      {/* Enable toggle */}
+      <div className="flex items-center justify-between border border-gray-300 p-4 bg-white">
+        <div>
+          <div className="font-semibold text-sm flex items-center gap-2"><Mail size={14}/> Enable email sending</div>
+          <div className="text-xs text-gray-500">If disabled, emails are mocked (logged only). Useful during testing.</div>
+        </div>
+        <Switch data-testid="email-enabled" checked={!!es.enabled} onCheckedChange={(v) => setEs({ ...es, enabled: v })} />
+      </div>
+
+      {/* API key */}
+      <div>
+        <Label className="text-xs uppercase tracking-wider">Resend API Key</Label>
+        <div className="mt-2 flex items-center gap-2">
+          <div className="flex-1 relative">
+            <Input
+              data-testid="email-api-key"
+              type={showKey ? "text" : "password"}
+              placeholder={es.resend_api_key_set ? `${es.resend_api_key_preview} (saved — leave blank to keep)` : "re_..."}
+              value={newKey}
+              onChange={(e) => setNewKey(e.target.value)}
+              className="rounded-sm font-mono"
+              autoComplete="off"
+            />
+          </div>
+          <button type="button" onClick={() => setShowKey(!showKey)} className="p-2 border border-gray-300 rounded-sm hover:bg-gray-50" data-testid="toggle-show-key">
+            {showKey ? <EyeOff size={14}/> : <Eye size={14}/>}
+          </button>
+          {es.resend_api_key_set && !newKey && (
+            <button type="button" onClick={() => { setEs({ ...es, _clear: true }); setNewKey(""); }} className="text-xs text-red-600 hover:underline" data-testid="clear-key-btn">Clear</button>
+          )}
+        </div>
+        {es.resend_api_key_set && (
+          <p className="text-xs text-green-700 mt-2 font-mono">✓ Key saved: {es.resend_api_key_preview}</p>
+        )}
+        {!es.resend_api_key_set && (
+          <p className="text-xs text-amber-700 mt-2">No key saved yet. Emails are mocked (logged to server console).</p>
+        )}
+      </div>
+
+      {/* Sender */}
+      <div>
+        <Label className="text-xs uppercase tracking-wider">Sender Email (From)</Label>
+        <Input
+          data-testid="email-sender"
+          placeholder="onboarding@resend.dev"
+          value={es.sender_email || ""}
+          onChange={(e) => setEs({ ...es, sender_email: e.target.value })}
+          className="rounded-sm mt-2 font-mono"
+        />
+        <p className="text-xs text-gray-500 mt-1">Must be from a domain verified in your Resend account, or Resend's default <span className="font-mono">onboarding@resend.dev</span>.</p>
+      </div>
+
+      <SaveBar onSave={save} saving={saving} dirty={newKey !== "" || es.sender_email !== (content.email_settings?.sender_email || "") || es.enabled !== (content.email_settings?.enabled || false)} />
+
+      {/* Test section */}
+      <div className="border-t border-gray-200 pt-6 mt-6">
+        <div className="overline text-gray-500 mb-3">— Send Test Email</div>
+        <div className="flex items-end gap-3">
+          <div className="flex-1">
+            <Label className="text-xs uppercase tracking-wider">Recipient</Label>
+            <Input
+              data-testid="email-test-to"
+              type="email"
+              placeholder="your-email@gmail.com"
+              value={testTo}
+              onChange={(e) => setTestTo(e.target.value)}
+              className="rounded-sm mt-2"
+            />
+          </div>
+          <Button data-testid="send-test-btn" onClick={sendTest} disabled={testing} className="rounded-sm bg-[var(--brand)] hover:bg-[var(--brand-hover)] text-white">
+            <Send size={14} className="mr-2" /> {testing ? "Sending..." : "Send Test"}
+          </Button>
+        </div>
+        <p className="text-xs text-gray-500 mt-2">Uses the key you just typed (if any), otherwise the saved key.</p>
+      </div>
+    </div>
+  );
+}
+
 // ======================= MAIN =======================
 export default function CMS() {
   const { content, save, refresh } = useContent();
@@ -503,6 +635,7 @@ export default function CMS() {
             <TabsTrigger value="about" data-testid="cms-tab-about" className="rounded-none border-b-2 border-transparent data-[state=active]:border-[var(--brand)] data-[state=active]:text-[var(--brand)] data-[state=active]:bg-transparent data-[state=active]:shadow-none px-5 py-3 text-sm">About</TabsTrigger>
             <TabsTrigger value="cfp" data-testid="cms-tab-cfp" className="rounded-none border-b-2 border-transparent data-[state=active]:border-[var(--brand)] data-[state=active]:text-[var(--brand)] data-[state=active]:bg-transparent data-[state=active]:shadow-none px-5 py-3 text-sm">Call for Papers</TabsTrigger>
             <TabsTrigger value="templates" data-testid="cms-tab-templates" className="rounded-none border-b-2 border-transparent data-[state=active]:border-[var(--brand)] data-[state=active]:text-[var(--brand)] data-[state=active]:bg-transparent data-[state=active]:shadow-none px-5 py-3 text-sm">Templates</TabsTrigger>
+            <TabsTrigger value="email" data-testid="cms-tab-email" className="rounded-none border-b-2 border-transparent data-[state=active]:border-[var(--brand)] data-[state=active]:text-[var(--brand)] data-[state=active]:bg-transparent data-[state=active]:shadow-none px-5 py-3 text-sm">Email</TabsTrigger>
           </TabsList>
           <div className="p-6">
             <TabsContent value="theme"><ThemeTab content={content} onSave={save} /></TabsContent>
@@ -512,6 +645,7 @@ export default function CMS() {
             <TabsContent value="about"><AboutTab content={content} onSave={save} /></TabsContent>
             <TabsContent value="cfp"><CfpTab content={content} onSave={save} /></TabsContent>
             <TabsContent value="templates"><TemplatesTab content={content} onSave={save} /></TabsContent>
+            <TabsContent value="email"><EmailTab content={content} onSave={save} /></TabsContent>
           </div>
         </Tabs>
       </Card>

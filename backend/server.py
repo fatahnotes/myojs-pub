@@ -330,6 +330,11 @@ DEFAULT_CONTENT = {
             "url": "https://customer-assets.emergentagent.com/job_paper-review-flow/artifacts/ezczxwag_E-JITU%20Template%20%28BAHASA%20MELAYU%29%20%E2%80%93%20Download%20This.docx",
         },
     ],
+    "email_settings": {
+        "resend_api_key": "",
+        "sender_email": "onboarding@resend.dev",
+        "enabled": False,
+    },
 }
 
 class ContentIn(BaseModel):
@@ -340,27 +345,84 @@ class ContentIn(BaseModel):
     about: Optional[dict] = None
     cfp: Optional[dict] = None
     templates: Optional[List[dict]] = None
+    email_settings: Optional[dict] = None
+
+class EmailTestIn(BaseModel):
+    to: EmailStr
+    resend_api_key: Optional[str] = None
+    sender_email: Optional[str] = None
 
 @api_router.get("/content")
 async def get_content():
     c = await db.site_content.find_one({"id": "singleton"}, {"_id": 0})
     if not c:
         await db.site_content.insert_one({**DEFAULT_CONTENT})
-        return DEFAULT_CONTENT
+        c = {**DEFAULT_CONTENT}
     # Ensure all top-level keys exist
     merged = {**DEFAULT_CONTENT, **{k: v for k, v in c.items() if v is not None}}
+    # Mask the Resend API key — never expose raw secret
+    es = dict(merged.get("email_settings") or {})
+    raw_key = es.get("resend_api_key") or ""
+    es["resend_api_key_set"] = bool(raw_key)
+    es["resend_api_key_preview"] = (raw_key[:4] + "••••" + raw_key[-4:]) if len(raw_key) >= 10 else ""
+    es.pop("resend_api_key", None)
+    merged["email_settings"] = es
     return merged
 
 @api_router.put("/content")
 async def update_content(body: ContentIn, user: dict = Depends(require_roles("admin"))):
     updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    # Special handling for email_settings: preserve existing key if caller didn't send one (empty string)
+    if "email_settings" in updates:
+        new_es = dict(updates["email_settings"] or {})
+        existing = await db.site_content.find_one({"id": "singleton"}, {"_id": 0, "email_settings": 1}) or {}
+        existing_es = existing.get("email_settings") or {}
+        if "resend_api_key" not in new_es or new_es.get("resend_api_key") in (None, ""):
+            # Keep existing key if user didn't provide a new one
+            new_es["resend_api_key"] = existing_es.get("resend_api_key", "")
+        updates["email_settings"] = {
+            "resend_api_key": new_es.get("resend_api_key", ""),
+            "sender_email": new_es.get("sender_email") or existing_es.get("sender_email") or "onboarding@resend.dev",
+            "enabled": bool(new_es.get("enabled", existing_es.get("enabled", True))),
+        }
     await db.site_content.update_one(
         {"id": "singleton"},
         {"$set": updates, "$setOnInsert": {"id": "singleton"}},
         upsert=True,
     )
-    c = await db.site_content.find_one({"id": "singleton"}, {"_id": 0})
-    return c
+    return await get_content()
+
+@api_router.post("/content/email/test")
+async def email_test(body: EmailTestIn, user: dict = Depends(require_roles("admin"))):
+    """Send a test email using either the provided key or the saved key."""
+    key = body.resend_api_key
+    sender = body.sender_email or SENDER_EMAIL
+    if not key:
+        # Use saved key
+        doc = await db.site_content.find_one({"id": "singleton"}, {"_id": 0, "email_settings": 1})
+        key = (doc or {}).get("email_settings", {}).get("resend_api_key", "")
+        sender = sender or (doc or {}).get("email_settings", {}).get("sender_email", SENDER_EMAIL)
+    if not key:
+        raise HTTPException(status_code=400, detail="No Resend API key configured. Save it first or provide one in this request.")
+    html = f"""<div style='font-family:sans-serif;padding:24px;max-width:520px;margin:auto;background:#fff;border:1px solid #e5e7eb'>
+        <div style='color:#6b7280;font-size:11px;letter-spacing:.2em;text-transform:uppercase'>— Test Email</div>
+        <h2 style='margin:12px 0 8px;font-size:24px'>SEAIPC 2026 — Email configured ✓</h2>
+        <p style='color:#374151;font-size:14px;line-height:1.6'>
+            This is a test message from your OJS. If you received this, your Resend API key and sender address are working correctly.
+        </p>
+        <p style='color:#9ca3af;font-size:12px;margin-top:24px;font-family:monospace'>
+            Sender: {sender}<br/>
+            Sent at: {datetime.now(timezone.utc).isoformat()}
+        </p>
+    </div>"""
+    try:
+        resend.api_key = key
+        params = {"from": sender, "to": [body.to], "subject": "SEAIPC 2026 — Test email", "html": html}
+        result = await asyncio.to_thread(resend.Emails.send, params)
+        return {"status": "sent", "id": result.get("id"), "to": body.to, "from": sender}
+    except Exception as e:
+        logger.error(f"Test email failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Send failed: {str(e)}")
 
 @api_router.post("/content/flyer/upload")
 async def upload_flyer(file: UploadFile = File(...), user: dict = Depends(require_roles("admin"))):
