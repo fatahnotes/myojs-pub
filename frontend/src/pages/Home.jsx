@@ -7,8 +7,8 @@ import { API } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { ArrowRight, CalendarDays, Download } from "lucide-react";
 
-const HERO_IMG = "https://static.prod-images.emergentagent.com/jobs/fcee9e80-3638-4d2f-ace1-0cb3fe5582e6/images/01c1bc0640dd831fe03f7cd269b2bb4db08e043a6e431725aa04ad97f9ed4dad.png";
-const RESEARCHER_IMG = "https://images.unsplash.com/photo-1691934310377-7868e489e215?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200";
+const HERO_IMG = "https://imz.or.id/wp-content/uploads/2026/05/WAQF-FOR-THE-FUTURE.jpg.jpeg";
+const RESEARCHER_IMG = "https://imz.or.id/wp-content/uploads/2026/05/FOR-ACADEMICIANS-RESEARCHERS-INDUSTRY-AND-CIVIL-SOCIETY.jpg.jpeg";
 
 function resolveUrl(u) {
   if (!u) return "";

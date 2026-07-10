@@ -57,13 +57,7 @@ export default function Login() {
             <Link to="/register" className="text-[var(--brand)] font-semibold">{t("nav_register")} →</Link>
           </div>
         </form>
-        <div className="mt-6 text-xs text-gray-500 font-mono border border-dashed border-gray-300 p-3">
-          <div className="font-semibold mb-1">Demo accounts:</div>
-          author@ojs.com / author123<br/>
-          reviewer@ojs.com / reviewer123<br/>
-          editor@ojs.com / editor123<br/>
-          admin@ojs.com / admin123
-        </div>
+        
       </div>
     </div>
   );
